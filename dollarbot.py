@@ -1,13 +1,16 @@
 from bs4 import BeautifulSoup
 import requests
+import yaml
 import json
 import time
 
-config_file = "conf.yml"
-data_file = "data.txt"
+CONFIG_FILE = "conf.yml"
+DATA_FILE = "data.txt"
+NOTIFICATION = "Buy: ${:04.2f} Sell: ${:04.2f} - Percentage: {:03.1f}% {}"
 
-# gets prices from DolayHoy and reads data from files, then uses decision logic based on % threshold to notify
 def poll_prices():
+    'Gets prices from DolayHoy and reads data from files, then uses decision logic based on % threshold to notify.'
+
     r = requests.get('http://dolarhoy.bullmarketbrokers.com/')
     soup = BeautifulSoup(r.content, 'html.parser')
     soup_b = soup.find("h4")
@@ -16,48 +19,51 @@ def poll_prices():
     sell = get_num(soup_s.getText())
 
     config = read_conf()
-    slack_hook = config[0]
-    threshold = float(config[1])
+    web_hook = config['slack']['webhook']
+    channel = config['slack']['channel']
+    threshold = float(config['dollar']['threshold'])
     last_price = float(read_data())
+
     difference = sell - last_price
     percentage = (difference / last_price) * 100.
     if percentage > threshold:
-        notification = "Buy: ${:04.2f} Sell: ${:04.2f} - Percentage: {:04.1f}% Up".format(buy, sell, percentage)
-        post_to_slack(notification, slack_hook)
+        status = "Up"
+        notification = NOTIFICATION.format(buy, sell, percentage, status)
+        post_to_slack(notification, web_hook, channel)
         save_last_price(sell)
     elif percentage < -threshold:
-        notification = "Buy: ${:04.2f} Sell: ${:04.2f} - Percentage: {:04.1f}% Down".format(buy, sell, percentage)
-        post_to_slack(notification, slack_hook)
+        status = "Down"
+        notification = NOTIFICATION.format(buy, sell, percentage, status)
+        post_to_slack(notification, web_hook, channel)
         save_last_price(sell)
 
-# returns a float from a given string -- works if there's only 1 dot in the string
 def get_num(s):
+    'Returns a float from a given string -- works if there is only 1 dot in the string.'
     return float(''.join(char for char in s if char.isdigit() or char == '.'))
 
-# saves last_price on the file's first line
 def save_last_price(sell):
-    with open(data_file, "w") as f:
+    'Saves last_price on the file\'s first line.'
+    with open(DATA_FILE, "w") as f:
         f.write(str(sell))
 
-# reads yaml configuration file and returns list with values
 def read_conf():
-    with open(config_file, "r") as f:
-        data = f.readlines()
-        # first line of the list would be Slack hook, second line would be percentage threshold
-    return data
+    'Reads yaml configuration file and returns config dictionary.'
+    with open(CONFIG_FILE, "r") as yml:
+        config = yaml.load(yml)
+    return config
 
-# reads data file with last saved sell price
 def read_data():
-    with open(data_file, "r") as f:
+    'Reads data file with last saved sell price.'
+    with open(DATA_FILE, "r") as f:
         data = f.readline()
     return data
 
-# posts a text to Slack
-def post_to_slack(text, webhook):
-    jason = {"text": text}
+def post_to_slack(text, webhook, channel):
+    'Posts a text to Slack via WebHook.'
+    jason = {"text": text, "channel": channel}
     requests.post(webhook, data=json.dumps(jason))
 
-# execute poll prices every 30 minutes
 while True:
+    # executes poll prices every 30 minutes'
     poll_prices()
     time.sleep(1800)
