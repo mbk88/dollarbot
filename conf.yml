@@ -1,0 +1,5 @@
+slack:
+ webhook: INSERT WEBHOOK URL HERE
+ channel: general
+dollar:
+ threshold: 0.5

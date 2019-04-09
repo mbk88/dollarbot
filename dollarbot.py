@@ -1,34 +1,69 @@
 from bs4 import BeautifulSoup
-import urllib3
-import re
 import requests
+import yaml
 import json
-import threading
+import time
 
-def dollar_poller():
-    dolar_venta = 0
-    threading.Timer(900.0, dollar_poller).start()
-    http = urllib3.PoolManager()
-    r = http.request('GET', 'http://dolarhoy.bullmarketbrokers.com/')
-    soup = BeautifulSoup(r.data, 'html.parser')
-    soupc = soup.find("h4")
-    soupv = soupc.findNext("h4")
-    dolar_c = re.search(r'\d\d\.\d\d', str(soupc)).group(0)
-    dolar_v = re.search(r'\d\d\.\d\d', str(soupv)).group(0)
-    dif = dolar_venta - float(dolar_v)
+CONFIG_FILE = "conf.yml"
+DATA_FILE = "data.txt"
+NOTIFICATION = "Buy: ${:04.2f} Sell: ${:04.2f} - Percentage: {:03.1f}% {}"
 
-    if float(dolar_v) > dolar_venta:
-        post_dollar_in_slack(dolar_c, dolar_v)
-        dolar_venta = dolar_v
-    elif dif > 0.10 or dif < -0.10:
-        post_dollar_in_slack(dolar_c, dolar_v)
-        dolar_venta = dolar_v
+def poll_prices():
+    'Gets prices from DolayHoy and reads data from files, then uses decision logic based on % threshold to notify.'
 
-def post_dollar_in_slack(compra, venta):
-    jason = {}
-    jason["text"] = "Compra: "+str(compra)+"  Venta: "+str(venta)
-    url = "https://hooks.slack.com/services/"
-    r = requests.post(url, data=json.dumps(jason))
+    r = requests.get('http://dolarhoy.bullmarketbrokers.com/')
+    soup = BeautifulSoup(r.content, 'html.parser')
+    soup_b = soup.find("h4")
+    soup_s = soup_b.findNext("h4")
+    buy = get_num(soup_b.getText())
+    sell = get_num(soup_s.getText())
 
+    config = read_conf()
+    web_hook = config['slack']['webhook']
+    channel = config['slack']['channel']
+    threshold = float(config['dollar']['threshold'])
+    last_price = float(read_data())
 
-dollar_poller()
+    difference = sell - last_price
+    percentage = (difference / last_price) * 100.
+    if percentage > threshold:
+        status = "Up"
+        notification = NOTIFICATION.format(buy, sell, percentage, status)
+        post_to_slack(notification, web_hook, channel)
+        save_last_price(sell)
+    elif percentage < -threshold:
+        status = "Down"
+        notification = NOTIFICATION.format(buy, sell, percentage, status)
+        post_to_slack(notification, web_hook, channel)
+        save_last_price(sell)
+
+def get_num(s):
+    'Returns a float from a given string -- works if there is only 1 dot in the string.'
+    return float(''.join(char for char in s if char.isdigit() or char == '.'))
+
+def save_last_price(sell):
+    'Saves last_price on the file\'s first line.'
+    with open(DATA_FILE, "w") as f:
+        f.write(str(sell))
+
+def read_conf():
+    'Reads yaml configuration file and returns config dictionary.'
+    with open(CONFIG_FILE, "r") as yml:
+        config = yaml.load(yml)
+    return config
+
+def read_data():
+    'Reads data file with last saved sell price.'
+    with open(DATA_FILE, "r") as f:
+        data = f.readline()
+    return data
+
+def post_to_slack(text, webhook, channel):
+    'Posts a text to Slack via WebHook.'
+    jason = {"text": text, "channel": channel}
+    requests.post(webhook, data=json.dumps(jason))
+
+while True:
+    # executes poll prices every 30 minutes'
+    poll_prices()
+    time.sleep(1800)
